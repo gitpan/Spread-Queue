@@ -4,6 +4,7 @@ use ExtUtils::MakeMaker;
 WriteMakefile(
     'NAME'		=> 'Spread::Queue',
     'VERSION_FROM'	=> 'Queue/Manager.pm', # finds $VERSION
+    'EXE_FILES'		=> [ 'sqm' ],
     'PREREQ_PM'		=> {
 			    Spread::Session => 0.1,
 			    Data::Serializer => 0.11,

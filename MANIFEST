@@ -5,6 +5,7 @@ Queue.pod
 Queue/Worker.pm
 Queue/Sender.pm
 Queue/Manager.pm
+Queue/ManagedWorker.pm
 Queue/FIFO.pm
 test.pl
 sqm

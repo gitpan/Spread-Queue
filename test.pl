@@ -1,20 +1,69 @@
-# Before `make install' is performed this script should be runnable with
-# `make test'. After `make install' it should work as `perl test.pl'
+#!/usr/bin/perl
 
-######################### We start with some black magic to print on failure.
+use strict;
+use Test::Simple tests => 1;
 
-# Change 1..1 below to 1..last_test_to_print .
-# (It may become useful if the test is moved to ./t subdirectory.)
+my $qname = "testq";
 
-BEGIN { $| = 1; print "1..1\n"; }
-END {print "not ok 1\n" unless $loaded;}
-use Spread::Queue;
-$loaded = 1;
-print "ok 1\n";
+# launch sqm
+my $sqm_pid;
+if ($sqm_pid == fork) {
+    # parent
+} else {
+    # launch queue manager
 
-######################### End of black magic.
+    my $PERLLIB = join(":", @INC);
+    exec "PERLLIB=$PERLLIB ./sqm $qname";
+}
 
-# Insert your test code below (better if it prints "ok 13"
-# (correspondingly "not ok 13") depending on the success of chunk 13
-# of the test code):
+# launch worker
+my $worker_pid;
+if ($worker_pid == fork) {
+    # parent
+} else {
+    # launch worker
 
+    use Spread::Queue::Worker;
+    my $worker = new Spread::Queue::Worker($qname);
+    $worker->callbacks(
+		       myfunc => \&worker_myfunc,
+		      );
+    $worker->run;
+    exit;
+}
+
+sleep 3; # wait for the others to start
+
+# this is the sender
+
+use Spread::Queue::Sender;
+my $sender = new Spread::Queue::Sender($qname);
+my $remote_method = "myfunc";
+my $data = { name => 'value' };
+$sender->submit($remote_method, $data);
+my $response = $sender->receive;
+
+ok($response->{response} eq "I heard you!", 'end-to-end');
+
+sleep 3;
+
+######################################################################
+
+kill 15, $worker_pid;
+kill 15, $sqm_pid;
+
+exit;
+
+######################################################################
+
+sub worker_myfunc {
+    my ($worker, $originator, $input) = @_;
+
+    sleep 1;
+
+    my $output = {
+		  response => "I heard you!",
+		 };
+    $worker->respond($originator, $output);
+    return $output;
+}

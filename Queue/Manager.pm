@@ -3,7 +3,7 @@ package Spread::Queue::Manager;
 require 5.005_03;
 use strict;
 use vars qw($VERSION);
-$VERSION = '0.1';
+$VERSION = '0.2';
 
 use Spread::Session;
 use Data::Serializer;
