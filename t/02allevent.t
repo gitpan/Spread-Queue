@@ -3,6 +3,10 @@
 use strict;
 use Test::Simple tests => 2;
 
+BEGIN {
+    $ENV{LOG_CHANNEL_CONFIG} = "t/logging.xml";
+}
+
 use Data::Dumper;
 
 my $qname = "testq";

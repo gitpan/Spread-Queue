@@ -1,15 +1,18 @@
 #!/usr/bin/perl
+#
+# Test case - Make sure that creating multiple Senders is OK
+#
 
 use strict;
 use Test::Simple tests => 2;
 
+use Data::Serializer;
 use Data::Dumper;
 
 my $qname = "testq";
 
 disable Log::Channel "Spread::Queue";
 disable Log::Channel "Spread::Session";
-
 
 # launch sqm
 my $sqm_pid;
@@ -32,11 +35,9 @@ if ($worker_pid = fork) {
     use Spread::Queue::Worker;
 
     my $worker = new Spread::Queue::Worker(QUEUE => $qname,
-#					   CALLBACK => \&worker_myfunc,
+					   SERIALIZER => new Data::Serializer(serializer => "YAML"),
 					   CALLBACK => sub {
 					       my ($worker, $originator, $input) = @_;
-#					       sleep 1;
-
 					       my $output = {
 							     response => "I heard you!",
 							    };
@@ -57,12 +58,21 @@ sleep 3; # wait for the sqm and worker to start
 
 use Spread::Queue::Sender;
 
-my $sender = new Spread::Queue::Sender(QUEUE => $qname);
-$sender->submit({
+my $sender1 = new Spread::Queue::Sender(QUEUE => $qname,
+				       SERIALIZER => new Data::Serializer(serializer => "YAML",
+									  portable => 0,
+									 ),
+				      );
+my $sender2 = new Spread::Queue::Sender(QUEUE => "fooq",
+				       SERIALIZER => new Data::Serializer(serializer => "YAML",
+									  portable => 0,
+									 ),
+				      );
+$sender1->submit({
 		 name1 => 'value1',
 		 name2 => 'value2',
 		});
-my $response = $sender->receive;
+my $response = $sender1->receive;
 ok($response->{response} eq "I heard you!", 'end-to-end');
 
 #sleep 3;

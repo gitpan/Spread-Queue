@@ -5,6 +5,7 @@ use strict;
 use vars qw($VERSION);
 $VERSION = '0.3';
 
+use Time::HiRes qw( time );	# for queue pending time metrics
 use Log::Channel;
 
 =head1 NAME
@@ -68,12 +69,15 @@ sub enqueue {
 
     qlog "enqueue $self->{NAME}\n";
 
-    push (@{$self->{QUEUE}}, @_);
+    push (@{$self->{QUEUE}},
+	  [ shift, time ]
+	 );
 }
 
 =item B<dequeue>
 
-  my $task = dequeue $q;
+  my $node = dequeue $q;
+  my ($queue_pending_time, $task) = @$node;
 
 Remove the first item from the front of the queue and return it.
 
@@ -84,7 +88,14 @@ sub dequeue {
 
     qlog "dequeue $self->{NAME}\n";
 
-    return shift @{$self->{QUEUE}};
+    my $node = shift @{$self->{QUEUE}};
+
+    return if !$node;
+
+    my ($data, $timestamp) = @$node;
+    return wantarray ?
+      ( $node->[0], time - $node->[1] )
+	: $node->[0];
 }
 
 =item B<pending>
@@ -112,7 +123,13 @@ Return the queue contents as a list, for inspection.
 sub all {
     my $self = shift;
 
-    return @{$self->{QUEUE}};
+    return map { $_->[0] } @{$self->{QUEUE}};
+}
+
+sub length {
+    my $self = shift;
+
+    return scalar(@{$self->{QUEUE}});
 }
 
 1;

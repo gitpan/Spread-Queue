@@ -1,5 +1,20 @@
 Revision history for Perl extension Spread::Queue.
 
+0.4   25 Oct 2002
+	* sqm: Default logging off.
+	* t/04yaml.t: Same as test 01 with YAML for serialization.
+	* Queue/: Sender.pm, Worker.pm: Allow for override of serialization
+	options in Session::Queue::Sender->new().  Anything supported by
+	Data::Serializer will work.
+	* Makefile.PL: Updated dependency for Spread::Session to 0.3
+	* Implemented ack for verifying that a Worker received the request.
+	* Multiple Senders will all share the same Spread::Session
+	* new test cases
+	* Log::Channel config file
+	* internal statistics collected by sqm; Sender method to retrieve
+	  stats from sqm; timestamping queue entries for stats
+	* sqm verbose logging should hide FIFO logging at level 1
+
 0.3   21 Mar 2002
 	test suite
 	support for (optional) Event.pm

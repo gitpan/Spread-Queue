@@ -42,7 +42,7 @@ it will reacquire any running workers (via heartbeat status signals).
 require 5.005_03;
 use strict;
 use vars qw($VERSION);
-$VERSION = '0.3';
+$VERSION = '0.4';
 
 use Spread::Session;
 use Data::Serializer;
@@ -81,17 +81,20 @@ sub new {
     $self->{HEARTBEAT} = $DEFAULT_HEARTBEAT unless $self->{HEARTBEAT};
 
     $self->{WQNAME} = "WQ_$self->{QUEUE}";
-    my $session = new Spread::Session;
+    my $session = new Spread::Session (
+				       MESSAGE_CALLBACK => \&_message_callback,
+				       TIMEOUT_CALLBACK => \&_timeout_callback,
+				      );
     $self->{SESSION} = $session;
-    $session->callbacks(
-			message => \&_message_callback,
-			timeout => \&_timeout_callback,
-		       );
-    $self->{SERIALIZER} = new Data::Serializer(serializer => 'Data::Denter');
+    $self->{SERIALIZER} = new Data::Serializer;
 
     sqwlog "Message queue worker activated on $self->{QUEUE}\n";
 
     $self->{STATUS} = 'ready';
+    $self->{METRICS} = {
+			start_time => time,
+			num_messages => 0,
+		       };
     return $self;
 }
 
@@ -143,7 +146,7 @@ sub setup_Event {
 }
 
 sub _message_callback {
-    my ($sender, $groups, $message, $self) = @_;
+    my ($msg, $self) = @_;
 
     $self->{STATUS} = 'busy';
 
@@ -154,17 +157,22 @@ sub _message_callback {
     # set status with the queue manager
     $self->_notify('working');
 
-    my $content = $self->{SERIALIZER}->deserialize($message);
+    my $content = $self->{SERIALIZER}->deserialize($msg->{BODY});
 
     my $body = $self->{SERIALIZER}->deserialize($content->{body});
 
-    my $callback = $self->{CALLBACK};
+    $self->{METRICS}->{num_messages}++;
+
+    $self->{SESSION}->publish($content->{originator},
+			      $self->{SERIALIZER}->serialize({
+							      type => "ack",
+							     }));
 
     # use eval so the loop doesn't die if there's bad code
     eval {
-	$callback->($self,
-		    $content->{originator},
-		    $body);
+	$self->{CALLBACK}->($self,
+			    $content->{originator},
+			    $body);
     };
     if ($@) {
 	# @@@@ may want some more sophisticated handling here.
@@ -184,7 +192,7 @@ sub _message_callback {
 sub _timeout_callback {
     my ($self) = @_;
 
-    sqwlog "TIMEOUT\n";
+#    sqwlog "TIMEOUT\n";
 
     if ($self->{STATUS} eq 'ready') {
 	# ping the sqm so it knows we're available
@@ -209,7 +217,10 @@ sub respond {
 
     sqwlog "Responding to $originator\n";
     $self->{SESSION}->publish($originator,
-			      $self->{SERIALIZER}->serialize($payload));
+			      $self->{SERIALIZER}->serialize({
+							      type => "response",
+							      body => $payload
+							     }));
 #    $self->_notify('ready');
 }
 

@@ -12,3 +12,8 @@ t/00basic.t
 t/01all.t
 t/02allevent.t
 t/03oneway.t
+t/04yaml.t
+t/05multi.t
+t/06event.t
+t/07fifo.t
+t/logging.xml

@@ -6,7 +6,7 @@ WriteMakefile(
     'VERSION_FROM'	=> 'Queue/Manager.pm', # finds $VERSION
     'EXE_FILES'		=> [ 'sqm' ],
     'PREREQ_PM'		=> {
-			    Spread::Session => 0.2,
+			    Spread::Session => 0.3,
 			    Data::Serializer => 0.11,
 			    Log::Channel => 0.4,
 			    Event => 0.85,

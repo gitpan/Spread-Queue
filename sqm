@@ -5,15 +5,26 @@ use Spread::Queue::Manager;
 use Log::Channel;
 use Getopt::Long;
 
-my $verbose;
-GetOptions("verbose|v=i" => \$verbose) or die;
+my $USAGE = "usage: sqm [-v {1,2}] queue-name";
+my $verbose = 0;
+GetOptions("verbose|v=i" => \$verbose) or die $USAGE;
 
-enable Log::Channel "Spread::Session" if $verbose > 1;
-enable Log::Channel "Spread::Queue::Manager" if $verbose > 0;
-enable Log::Channel "Spread::Session::message" if $verbose > 1;
-enable Log::Channel "Spread::Queue::FIFO" if $verbose > 1;
+my $queue_name = shift @ARGV || die $USAGE;
 
-my $queue_name = shift @ARGV || die "usage: sqm [-v {0,1}] queue-name";
+disable Log::Channel "Spread::Session";
+disable Log::Channel "Spread::Queue";
+disable Log::Channel "Spread::Queue::FIFO";
+
+if ($verbose > 0) {
+    enable Log::Channel "Spread::Queue";
+    disable Log::Channel "Spread::Queue::FIFO";
+    enable Log::Channel "Spread::Queue::Manager";
+}
+if ($verbose > 1) {
+    enable Log::Channel "Spread::Session";
+    enable Log::Channel "Spread::Session::message";
+    enable Log::Channel "Spread::Queue::FIFO";
+}
 
 my $session = new Spread::Queue::Manager(QUEUE => $queue_name);
 

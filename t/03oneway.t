@@ -5,6 +5,9 @@ use Test::Simple tests => 2;
 
 use Data::Dumper;
 
+disable Log::Channel "Spread::Queue";
+disable Log::Channel "Spread::Session";
+
 my $qname = "testq";
 
 # launch sqm

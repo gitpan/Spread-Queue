@@ -3,13 +3,13 @@
 use strict;
 use Test::Simple tests => 2;
 
+use Data::Serializer;
 use Data::Dumper;
 
 my $qname = "testq";
 
 disable Log::Channel "Spread::Queue";
 disable Log::Channel "Spread::Session";
-
 
 # launch sqm
 my $sqm_pid;
@@ -32,11 +32,12 @@ if ($worker_pid = fork) {
     use Spread::Queue::Worker;
 
     my $worker = new Spread::Queue::Worker(QUEUE => $qname,
+					   SERIALIZER => new Data::Serializer(serializer => "YAML"),
 #					   CALLBACK => \&worker_myfunc,
 					   CALLBACK => sub {
 					       my ($worker, $originator, $input) = @_;
 #					       sleep 1;
-
+#					       print "RECEIVED: ", Dumper($input);
 					       my $output = {
 							     response => "I heard you!",
 							    };
@@ -57,7 +58,12 @@ sleep 3; # wait for the sqm and worker to start
 
 use Spread::Queue::Sender;
 
-my $sender = new Spread::Queue::Sender(QUEUE => $qname);
+my $sender = new Spread::Queue::Sender(QUEUE => $qname,
+				       SERIALIZER => new Data::Serializer(serializer => "YAML",
+									  portable => 0,
+#									  serializer_token => 0,
+									 ),
+				      );
 $sender->submit({
 		 name1 => 'value1',
 		 name2 => 'value2',

@@ -38,7 +38,7 @@ messages), the new sqm should terminate.
 require 5.005_03;
 use strict;
 use vars qw($VERSION);
-$VERSION = '0.3';
+$VERSION = '0.4';
 
 use Carp;
 
@@ -87,12 +87,11 @@ sub new {
     $self->{MQ} = new Spread::Queue::FIFO($self->{MQNAME});
     $self->{WQ} = new Spread::Queue::FIFO($self->{WQNAME});
 
-    $self->{SESSION} = new Spread::Session;
-    $self->{SESSION}->callbacks(
-				message => \&message_callback,
-				timeout => \&timeout_callback,
-				admin => \&admin_callback,
-			       );
+    $self->{SESSION} = new Spread::Session (
+					    MESSAGE_CALLBACK => \&message_callback,
+					    ADMIN_CALLBACK => \&admin_callback,
+					    TIMEOUT_CALLBACK => \&timeout_callback,
+					   );
     $self->{SESSION}->subscribe($self->{MQNAME});
     $self->{SESSION}->subscribe($self->{WQNAME});
 
@@ -100,7 +99,26 @@ sub new {
 
     $self->{ACTIVE} = 1;
 
+    $self->initialize_statistics;
+
     return $self;
+}
+
+sub initialize_statistics {
+    my $self = shift;
+
+    $self->{STATISTICS} = {
+			   START_TIME => 0,
+			   INBOUND_MESSAGES => 0,
+			   ADMIN_MESSAGES => 0,
+			   MESSAGES_DISPATCHED => 0,
+			   MESSAGES_QUEUED => 0,
+			   CURRENTLY_QUEUED => 0,
+			   GROSS_PENDING_TIME => 0,
+			   WORKER_NOTIFICATIONS => 0,
+			   WORKER_REGISTRATIONS => 0,
+			   WORKER_TERMINATIONS => 0,
+			  };
 }
 
 =item B<new>
@@ -114,6 +132,8 @@ Run loop for the queue manager.  Does not return unless interrupted.
 sub run {
     my ($self) = shift;
 
+    $self->{STATISTICS}->{START_TIME} = time;
+
     my $heartbeat = $ENV{SQM_HEARTBEAT} || $DEFAULT_SQM_HEARTBEAT;
 
     while ($self->{ACTIVE}) {
@@ -123,12 +143,12 @@ sub run {
 
 
 sub message_callback {
-    my ($sender, $groups, $message, $self) = @_;
+    my ($msg, $self) = @_;
 
-    if (grep { $_ eq $self->{MQNAME} } @$groups) {
-	$self->handle_message($sender, $message);
-    } elsif (grep { $_ eq $self->{WQNAME} } @$groups) {
-	$self->handle_worker($sender, $message);
+    if (grep { $_ eq $self->{MQNAME} } @{$msg->{GROUPS}}) {
+	$self->handle_message($msg->{SENDER}, $msg->{BODY});
+    } elsif (grep { $_ eq $self->{WQNAME} } @{$msg->{GROUPS}}) {
+	$self->handle_worker($msg->{SENDER}, $msg->{BODY});
     }
 }
 
@@ -136,8 +156,13 @@ sub message_callback {
 sub handle_message {
     my ($self, $sender, $message) = @_;
 
+    $self->handle_admin_command($sender, $message) && return;
+
+    $self->{STATISTICS}->{INBOUND_MESSAGES}++;
+
     $self->_check_worker_queue;
-    if (my $available_worker = $self->{WQ}->dequeue) {
+    my ($available_worker, $pending_time) = $self->{WQ}->dequeue;
+    if ($available_worker) {
 	$self->dispatch($available_worker, {
 					    originator => $sender,
 					    body => $message
@@ -148,12 +173,31 @@ sub handle_message {
 			      originator => $sender,
 			      body => $message
 			     });
+	$self->{STATISTICS}->{MESSAGES_QUEUED}++;
     }
+}
+
+
+sub handle_admin_command {
+    my ($self, $sender, $message) = @_;
+
+    if ($message eq "^^status") {
+	qmlog "STATUS request from $sender\n";
+
+	$self->{STATISTICS}->{ADMIN_MESSAGES}++;
+
+	$self->{SESSION}->publish($sender,
+				  $self->snapshot);
+	return 1;
+    }
+    return;
 }
 
 
 sub handle_worker {
     my ($self, $sender, $message) = @_;
+
+    $self->{STATISTICS}->{WORKER_NOTIFICATIONS}++;
 
     my $data = $self->{SERIALIZER}->deserialize($message);
     my $status = $data->{status};
@@ -162,6 +206,8 @@ sub handle_worker {
     if (!$worker) {
 	$worker = new Spread::Queue::ManagedWorker($sender);
 	$Worker{$sender} = $worker;
+
+	$self->{STATISTICS}->{WORKER_REGISTRATIONS}++;
     }
 
 #    qmlog "WORKER ", $worker->private, " status change: $status\n";
@@ -185,9 +231,11 @@ sub worker_ready {
 
     delete $worker->{TASK};
 
-    my $pending_message = $self->{MQ}->dequeue;
+    my ($pending_message, $pending_time) = $self->{MQ}->dequeue;
     if ($pending_message) {
 	$self->dispatch($worker, $pending_message);
+	$self->{STATISTICS}->{GROSS_PENDING_TIME} += $pending_time;
+	qmlog "PENDING TIME: $pending_time\n";
     } else {
 	if ($worker->is_ready) {
 	    qmlog "WORKER ", $worker->private, " ALREADY PENDING\n";
@@ -217,6 +265,8 @@ sub worker_terminated {
 
     $self->_dispose($worker);
 #    $self->_check_worker_queue;
+
+    $self->{STATISTICS}->{WORKER_TERMINATIONS}++;
 }
 
 
@@ -229,6 +279,8 @@ sub dispatch {
 			      $self->{SERIALIZER}->serialize($message));
     $worker->{TASK} = $message;
     $worker->assigned;
+
+    $self->{STATISTICS}->{MESSAGES_DISPATCHED}++;
 }
 
 
@@ -302,11 +354,10 @@ sub _clear_stuck_workers {
 # to the MQ_ and WQ_ groups for this queue.
 
 sub admin_callback {
-    my ($service_type, $sender, $groups, $message, $self) = @_;
+    my ($msg, $self) = @_;
 
-    if ($service_type & REG_MEMB_MESS) {
-#	qmlog "New member(s) for $sender: ", join(",", @$groups), "\n";
-	foreach my $group (@$groups) {
+    if ($msg->{SERVICE_TYPE} & REG_MEMB_MESS) {
+	foreach my $group (@{$msg->{GROUPS}}) {
 	    if ($group ne $self->{SESSION}->{PRIVATE_GROUP}) {
 		if (!$self->{INCUMBENT}) {
 		    carp "Duplicate sqm $group detected for $self->{QUEUE}; aborting";
@@ -319,6 +370,22 @@ sub admin_callback {
 	$self->{INCUMBENT} = 1;
     }
 }
+
+sub snapshot {
+    my $self = shift;
+
+    $self->{STATISTICS}->{RUN_TIME} =
+      time - $self->{STATISTICS}->{START_TIME};
+
+    $self->{STATISTICS}->{CURRENTLY_QUEUED} =
+      $self->{MQ}->length;
+
+    return $self->{SERIALIZER}->serialize({
+					   type => "status",
+					   body => $self->{STATISTICS}
+					  });
+}
+
 
 1;
 
