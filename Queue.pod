@@ -1,0 +1,85 @@
+=head1 NAME
+
+Spread::Queue - One-of-many queued messaging delivery, using Spread
+
+=head1 SYNOPSIS
+
+=head2 Queue manager
+
+  $ sqm myqueue
+
+
+=head2 Worker ("server") process
+
+  use Spread::Queue::Worker;
+
+  my $worker = new Spread::Queue::Worker("myqueue");
+  $worker->callbacks(
+		     myfunc => \&myfunc,
+		    );
+  $SIG{INT} = \&signal_handler;
+  $worker->run;
+
+  sub myfunc {
+    my ($worker, $originator, $input) = @_;
+
+    my $result = {
+		  response => "I heard you!",
+		 };
+    $worker->respond($originator, $result);
+  }
+
+
+=head2 Requesting ("client") process
+
+  use Spread::Queue::Sender;
+
+  my $sender = new Spread::Queue::Sender("myqueue");
+
+  $sender->submit("myfunc", { name => "value" });
+  my $response = $sender->receive;
+
+or
+
+  my $response = $sender->rpc("myfunc", { name => "value" });
+
+
+=head1 WARNING
+
+THIS IS ALPHA SOFTWARE.  There are no guarantees that the current
+interchange will remain, or that it will work in even remotely the
+same way.
+
+=head1 DESCRIPTION
+
+Message-queueing layer using Spread for message delivery.
+
+Queues are managed by a dedicated manager process (sqm).  This agent
+coordinates task assignments for some number of workers who accept
+messages delivered to a queue (a Spread public group).
+
+Workers register their availability with the queue manager, and are
+assigned tasks when available.  The worker knows the originator of
+each message, so responses (if needed) can be sent directly to the
+originator's private mailbox.
+
+=head1 AUTHOR
+
+Jason W. May <jmay@pobox.com>
+
+=head1 COPYRIGHT
+
+Copyright (C) 2002 Jason W. May.  All rights reserved.
+This module is free software; you can redistribute it and/or
+modify it under the same terms as Perl itself.
+
+The license for the Spread software can be found at 
+http://www.spread.org/license
+
+=head1 SEE ALSO
+
+  L<Spread::Session>
+  L<Spread>
+  http://www.tibco.com/products/rv/index.html
+
+=cut

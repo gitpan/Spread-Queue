@@ -1,0 +1,18 @@
+#!/usr/bin/perl
+
+use strict;
+use Spread::Queue::Manager;
+
+use Log::Channel;
+
+enable Log::Channel "Spread::Session";
+enable Log::Channel "Spread::Session::message";
+enable Log::Channel "Spread::Queue::Manager";
+enable Log::Channel "Queue";
+
+
+my $queue_name = shift @ARGV || die "usage: sqm queue-name";
+
+my $session = new Spread::Queue::Manager($queue_name);
+
+$session->run;
