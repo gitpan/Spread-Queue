@@ -1,6 +1,9 @@
 package Spread::Queue::FIFO;
 
+require 5.005_03;
 use strict;
+use vars qw($VERSION);
+$VERSION = '0.3';
 
 use Log::Channel;
 
@@ -127,6 +130,6 @@ modify it under the same terms as Perl itself.
 
 =head1 SEE ALSO
 
-  L<Thread::Queue>
+  L<Spread::Queue>
 
 =cut

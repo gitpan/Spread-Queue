@@ -7,6 +7,8 @@ Queue/Sender.pm
 Queue/Manager.pm
 Queue/ManagedWorker.pm
 Queue/FIFO.pm
-test.pl
 sqm
-
+t/00basic.t
+t/01all.t
+t/02allevent.t
+t/03oneway.t

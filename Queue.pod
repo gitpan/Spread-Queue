@@ -63,6 +63,33 @@ assigned tasks when available.  The worker knows the originator of
 each message, so responses (if needed) can be sent directly to the
 originator's private mailbox.
 
+=head1 ENVIRONMENT
+
+  SPREAD_QUEUE_NAME - default queue name if not provided in constructor
+			(used by sqm, worker and sender)
+
+=head1 TO DO
+
+Worker auto-launch sqm.
+
+Should co-exist with non-queueing Spread messaging (should be able to
+share a Spread::Session)
+
+Co-exist with event frameworks: POE, Stem, others
+
+Manager should have a private queue available for status reporting
+and possible control functions.
+
+sqm should maintain activity metrics and provide admin reports; workers
+should possibly maintain some stats as well.  Interesting metrics include
+total # of tasks assigned, current # of workers, total # of different
+workers that have ever registered since this manager started, utilization
+of those workers, start time of manager, start times of active workers,
+process info for manager and workers (host, pid, memory usage, priority,
+etc.), idle time of active workers.
+
+Let app choose Data::Serialization option (e.g. YAML)
+
 =head1 AUTHOR
 
 Jason W. May <jmay@pobox.com>
@@ -81,5 +108,6 @@ http://www.spread.org/license
   L<Spread::Session>
   L<Spread>
   http://www.tibco.com/products/rv/index.html
+  L<Data::Serializer>
 
 =cut

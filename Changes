@@ -1,4 +1,15 @@
 Revision history for Perl extension Spread::Queue.
 
+0.3   21 Mar 2002
+	test suite
+	support for (optional) Event.pm
+	more perldocs
+	distinguish assigned and acknowledged states in	ManagedWorker
+	consistent initialization convention: hash, with QUEUE
+	cleaning up the worker queue: _check_worker_queue and _dispose
+	no structure required on messages between sender and worker
+	removed tie-in with request/response protocol
+	queue manager collision detection
+
 0.1   10 Feb 2002
 	initial version

@@ -1,11 +1,49 @@
 package Spread::Queue::Manager;
 
+=head1 NAME
+
+Spread::Queue::Manager - coordinate one-of-many message delivery
+
+=head1 SYNOPSIS
+
+The provided 'sqm' executable does this:
+
+  use Spread::Queue::Manager;
+  my $queue_name = shift @ARGV || die "usage: sqm queue-name";
+  my $session = new Spread::Queue::Manager($queue_name);
+  $session->run;
+
+=head1 DESCRIPTION
+
+The queue manager is responsible for assigning incoming messages
+(see Spread::Queue::Sender) to registered workers (see Spread::Queue::Worker).
+
+When a message comes in, it is assigned to the first available worker,
+otherwise it is put into a FIFO queue.
+
+When a worker reports availability, it is sent the first pending message,
+otherwise it is put into a FIFO queue.
+
+When a message is sent to a worker, the worker should immediately
+acknowledge receipt.  If the worker does not acknowledge, the message
+will (eventually) be assigned to another worker.
+
+If a queue manager is already running (detected via Spread group membership
+messages), the new sqm should terminate.
+
+=head1 METHODS
+
+=cut
+
 require 5.005_03;
 use strict;
 use vars qw($VERSION);
-$VERSION = '0.2';
+$VERSION = '0.3';
+
+use Carp;
 
 use Spread::Session;
+use Spread;
 use Data::Serializer;
 
 use Spread::Queue::ManagedWorker;
@@ -18,21 +56,33 @@ BEGIN {
     sub qmlog { $qmlog->(@_) }
 }
 
+my $DEFAULT_SQM_HEARTBEAT = 3;
 
 my %Worker;
+
+=item B<new>
+
+  my $session = new Spread::Queue::Manager($queue_name);
+
+Initialize Spread messaging environment, and prepare to act
+as the queue manager.  If queue_name is omitted, environment
+variable SPREAD_QUEUE will be checked.
+
+=cut
 
 sub new {
     my $proto = shift;
     my $class = ref ($proto) || $proto;
 
-    my $queue = shift;
-
-    my $self  = {};
+    my %config = @_;
+    my $self  = \%config;
     bless ($self, $class);
 
-    $self->{QUEUE} = $queue;
-    $self->{WQNAME} = "WQ_$queue";
-    $self->{MQNAME} = "MQ_$queue";
+    $self->{QUEUE} = $ENV{SPREAD_QUEUE} unless $self->{QUEUE};
+    croak "Queue name is required" unless $self->{QUEUE};
+
+    $self->{WQNAME} = "WQ_$self->{QUEUE}";
+    $self->{MQNAME} = "MQ_$self->{QUEUE}";
 
     $self->{MQ} = new Spread::Queue::FIFO($self->{MQNAME});
     $self->{WQ} = new Spread::Queue::FIFO($self->{WQNAME});
@@ -41,20 +91,33 @@ sub new {
     $self->{SESSION}->callbacks(
 				message => \&message_callback,
 				timeout => \&timeout_callback,
+				admin => \&admin_callback,
 			       );
     $self->{SESSION}->subscribe($self->{MQNAME});
     $self->{SESSION}->subscribe($self->{WQNAME});
 
     $self->{SERIALIZER} = new Data::Serializer(serializer => 'Data::Denter');
 
+    $self->{ACTIVE} = 1;
+
     return $self;
 }
+
+=item B<new>
+
+  $session->run;
+
+Run loop for the queue manager.  Does not return unless interrupted.
+
+=cut
 
 sub run {
     my ($self) = shift;
 
-    for (;;) {
-	$self->{SESSION}->receive(2, $self);
+    my $heartbeat = $ENV{SQM_HEARTBEAT} || $DEFAULT_SQM_HEARTBEAT;
+
+    while ($self->{ACTIVE}) {
+	$self->{SESSION}->receive($heartbeat, $self);
     }
 }
 
@@ -73,8 +136,8 @@ sub message_callback {
 sub handle_message {
     my ($self, $sender, $message) = @_;
 
-    my $available_worker = $self->{WQ}->dequeue;
-    if ($available_worker && $self->dispatchable()) {
+    $self->_check_worker_queue;
+    if (my $available_worker = $self->{WQ}->dequeue) {
 	$self->dispatch($available_worker, {
 					    originator => $sender,
 					    body => $message
@@ -101,6 +164,8 @@ sub handle_worker {
 	$Worker{$sender} = $worker;
     }
 
+#    qmlog "WORKER ", $worker->private, " status change: $status\n";
+
     if ($status eq 'ready') {
 	$self->worker_ready($worker);
     } elsif ($status eq 'working') {
@@ -108,13 +173,17 @@ sub handle_worker {
     } elsif ($status eq 'terminate') {
 	$self->worker_terminated($worker);
     } else {
-	qmlog "**** INVALID STATUS FROM WORKER $sender ***\n";
+	qmlog "**** INVALID STATUS '$status' FROM WORKER $sender ***\n";
     }
+
+    $self->_clear_stuck_workers;
 }
 
 
 sub worker_ready {
     my ($self, $worker) = @_;
+
+    delete $worker->{TASK};
 
     my $pending_message = $self->{MQ}->dequeue;
     if ($pending_message) {
@@ -134,7 +203,7 @@ sub worker_ready {
 sub worker_working {
     my ($self, $worker) = @_;
 
-    if ($worker->is_working) {
+    if ($worker->is_assigned) {
 	qmlog "WORKER ", $worker->private, " ACKNOWLEDGED\n";
 	$worker->acknowledged;
     } else {
@@ -146,9 +215,8 @@ sub worker_working {
 sub worker_terminated {
     my ($self, $worker) = @_;
 
-    qmlog "WORKER ", $worker->private, " TERMINATED\n";
-    $worker->terminated;
-    $self->dispatchable();
+    $self->_dispose($worker);
+#    $self->_check_worker_queue;
 }
 
 
@@ -159,8 +227,8 @@ sub dispatch {
 
     $self->{SESSION}->publish($worker->private,
 			      $self->{SERIALIZER}->serialize($message));
-
-    $worker->working;
+    $worker->{TASK} = $message;
+    $worker->assigned;
 }
 
 
@@ -171,30 +239,110 @@ sub timeout_callback {
     # who haven't signalled readiness lately
 
     foreach my $worker ($self->{WQ}->all) {
-	if ($worker->is_talking) {
-	    # leader looks OK
-	    return;
-	}
-	my $worker = $self->{WQ}->dequeue;
-	qmlog "REMOVED SILENT PENDING WORKER ", $worker->private, "\n";
+	qmlog "\t...worker $worker->{PRIVATE} is $worker->{STATUS}\n";
     }
-}
-
-sub dispatchable {
-    my ($self) = shift;
-
-    # scrub worker from the front of the queue
-    # who haven't signalled readiness lately
 
     foreach my $worker ($self->{WQ}->all) {
 	if ($worker->is_talking) {
 	    # leader looks OK
-	    return 1;
+	    last;
 	}
 	my $worker = $self->{WQ}->dequeue;
-	qmlog "REMOVED SILENT PENDING WORKER ", $worker->private, "\n";
+	$self->_dispose($worker);
     }
-    return;
+
+    $self->_clear_stuck_workers;
+}
+
+sub _check_worker_queue {
+    my ($self) = shift;
+
+    # scrub workers from the front of the queue
+    # who haven't signalled readiness lately
+
+    foreach my $worker ($self->{WQ}->all) {
+	if ($worker->is_talking) {
+	    # this one is fine
+	    return;
+	}
+	my $worker = $self->{WQ}->dequeue;
+	$self->_dispose($worker);
+    }
+}
+
+sub _dispose {
+    my ($self, $worker) = @_;
+
+    qmlog "WORKER ", $worker->private, " TERMINATED\n";
+
+    # reassign the task, and retire the worker
+    my $task = $worker->{TASK};
+    if ($task) {
+	qmlog "Reassigning stuck message\n";
+	$self->handle_message($task->{originator},
+			      $task->{body});
+    }
+    delete $worker->{TASK};
+    $worker->terminated;
+}
+
+sub _clear_stuck_workers {
+    my $self = shift;
+
+    foreach my $worker (values %Worker) {
+	if ($worker->is_stuck) {
+	    qmlog "WORKER ", $worker->private, " IS STUCK\n";
+	    $self->_dispose($worker);
+	}
+    }
+}
+
+# Called for Spread admin messages - in particular, changes in
+# group membership.  There should only be one listener subscribed
+# to the MQ_ and WQ_ groups for this queue.
+
+sub admin_callback {
+    my ($service_type, $sender, $groups, $message, $self) = @_;
+
+    if ($service_type & REG_MEMB_MESS) {
+#	qmlog "New member(s) for $sender: ", join(",", @$groups), "\n";
+	foreach my $group (@$groups) {
+	    if ($group ne $self->{SESSION}->{PRIVATE_GROUP}) {
+		if (!$self->{INCUMBENT}) {
+		    carp "Duplicate sqm $group detected for $self->{QUEUE}; aborting";
+		    $self->{ACTIVE} = 0;
+		} else {
+		    carp "Duplicate sqm $group detected for $self->{QUEUE}; other should abort";
+		}
+	    }
+	}
+	$self->{INCUMBENT} = 1;
+    }
 }
 
 1;
+
+
+=head1 AUTHOR
+
+Jason W. May <jmay@pobox.com>
+
+=head1 COPYRIGHT
+
+Copyright (C) 2002 Jason W. May.  All rights reserved.
+This module is free software; you can redistribute it and/or
+modify it under the same terms as Perl itself.
+
+The license for the Spread software can be found at 
+http://www.spread.org/license
+
+=head1 SEE ALSO
+
+  L<Spread::Session>
+  L<Spread::Queue::FIFO>
+  L<Spread::Queue::Sender>
+  L<Spread::Queue::Worker>
+  L<Spread::Queue::ManagedWorker>
+  L<Data::Serializer>
+
+=cut

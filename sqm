@@ -2,17 +2,19 @@
 
 use strict;
 use Spread::Queue::Manager;
-
 use Log::Channel;
+use Getopt::Long;
 
-enable Log::Channel "Spread::Session";
-enable Log::Channel "Spread::Session::message";
-enable Log::Channel "Spread::Queue::Manager";
-enable Log::Channel "Queue";
+my $verbose;
+GetOptions("verbose|v=i" => \$verbose) or die;
 
+enable Log::Channel "Spread::Session" if $verbose > 1;
+enable Log::Channel "Spread::Queue::Manager" if $verbose > 0;
+enable Log::Channel "Spread::Session::message" if $verbose > 1;
+enable Log::Channel "Spread::Queue::FIFO" if $verbose > 1;
 
-my $queue_name = shift @ARGV || die "usage: sqm queue-name";
+my $queue_name = shift @ARGV || die "usage: sqm [-v {0,1}] queue-name";
 
-my $session = new Spread::Queue::Manager($queue_name);
+my $session = new Spread::Queue::Manager(QUEUE => $queue_name);
 
 $session->run;
